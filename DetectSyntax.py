@@ -1,191 +1,184 @@
-import sublime, sublime_plugin
-import os, string, re
+import os
+import re
+
+import sublime
+import sublime_plugin
 
 plugin_directory = os.getcwdu()
 
+
 class DetectSyntaxCommand(sublime_plugin.EventListener):
-	def __init__(self):
-		super(DetectSyntaxCommand, self).__init__()
-		self.first_line = None
-		self.file_name = None
-		self.view = None
-		self.syntaxes = []
-		self.plugin_name = 'DetectSyntax'
-		self.plugin_dir = plugin_directory
-		self.user_dir = sublime.packages_path() + os.path.sep + 'User'
-		self.reraise_exceptions = False
+    def __init__(self):
+        super(DetectSyntaxCommand, self).__init__()
+        self.first_line = None
+        self.file_name = None
+        self.view = None
+        self.syntaxes = []
+        self.plugin_name = 'DetectSyntax'
+        self.plugin_dir = plugin_directory
+        self.user_dir = sublime.packages_path() + os.path.sep + 'User'
+        self.reraise_exceptions = False
 
+    def on_new(self, view):
+        settings = sublime.load_settings(self.plugin_name + '.sublime-settings')
+        name = settings.get("new_file_syntax")
+        if name:
+            self.view = view
+            self.set_syntax(name)
 
-	def on_new(self, view):
-		settings = sublime.load_settings(self.plugin_name + '.sublime-settings')
-		name = settings.get("new_file_syntax")
-		if name:
-			self.view = view
-			self.set_syntax(name)
+    def on_load(self, view):
+        self.detect_syntax(view)
 
+    def on_post_save(self, view):
+        self.detect_syntax(view)
 
-	def on_load(self, view):
-		self.detect_syntax(view)
+    def detect_syntax(self, view):
+        if view.is_scratch() or not view.file_name:  # buffer has never been saved
+            return
 
-	
-	def on_post_save(self, view):
-		self.detect_syntax(view)
-	  
+        self.reset_cache_variables(view)
+        self.load_syntaxes()
 
-	def detect_syntax(self, view):
-		if view.is_scratch() or not view.file_name: # buffer has never been saved
-			return
+        if not self.syntaxes:
+            return
 
-		self.reset_cache_variables(view)
-		self.load_syntaxes()
-		
-		if not self.syntaxes:
-			return
+        for syntax in self.syntaxes:
+            # stop on the first syntax that matches
+            if self.syntax_matches(syntax):
+                self.set_syntax(syntax.get("name"))
+                break
 
-		for syntax in self.syntaxes:
-			# stop on the first syntax that matches
-			if self.syntax_matches(syntax):
-				self.set_syntax(syntax.get("name"))
-				break
+    def reset_cache_variables(self, view):
+        self.view = view
+        self.file_name = view.file_name()
+        self.first_line = view.substr(view.line(0))
+        self.syntaxes = []
+        self.reraise_exceptions = False
 
+    def set_syntax(self, name):
+        # the default settings file uses / to separate the syntax name parts, but if the user
+        # is on windows, that might not work right. And if the user happens to be on Mac/Linux but
+        # is using rules that were written on windows, the same thing will happen. So let's
+        # be intelligent about this and replace / and \ with os.path.sep to get to
+        # a reasonable starting point
+        name = name.replace('/', os.path.sep)
+        name = name.replace('\\', os.path.sep)
 
-	def reset_cache_variables(self, view):
-		self.view = view
-		self.file_name = view.file_name()
-		self.first_line = view.substr(view.line(0))
-		self.syntaxes = []
-		self.reraise_exceptions = False
+        dirs = name.split(os.path.sep)
+        name = dirs.pop()
+        path = os.path.sep.join(dirs)
 
+        if not path:
+            path = name
 
-	def set_syntax(self, name):
-		# the default settings file uses / to separate the syntax name parts, but if the user
-		# is on windows, that might not work right. And if the user happens to be on Mac/Linux but
-		# is using rules that were written on windows, the same thing will happen. So let's
-		# be intelligent about this and replace / and \ with os.path.sep to get to
-		# a reasonable starting point
-		name = name.replace('/', os.path.sep)
-		name = name.replace('\\', os.path.sep)
+        file_name = name + '.tmLanguage'
+        new_syntax = 'Packages/' + path + '/' + file_name
+        new_syntax_path = os.path.sep.join([sublime.packages_path(), path, file_name])
 
-		dirs = name.split(os.path.sep)
-		name = dirs.pop()
-		path = os.path.sep.join(dirs)
+        current_syntax = self.view.settings().get('syntax')
 
-		if not path:
-			path = name
+        # only set the syntax if it's different
+        if new_syntax != current_syntax:
+            # let's make sure it exists first!
+            if os.path.exists(new_syntax_path):
+                self.view.set_syntax_file(new_syntax)
+                print 'Syntax set to ' + name + ' using ' + new_syntax_path
+            else:
+                print 'Syntax file for ' + name + ' does not exist at ' + new_syntax_path
 
-		file_name = name + '.tmLanguage'
-		new_syntax = 'Packages/' + path + '/' + file_name
-		new_syntax_path = os.path.sep.join([sublime.packages_path(), path, file_name])
+    def load_syntaxes(self):
+        settings = sublime.load_settings(self.plugin_name + '.sublime-settings')
+        self.reraise_exceptions = settings.get("reraise_exceptions")
+        # load the default syntaxes
+        default_syntaxes = settings.get("default_syntaxes")
+        if default_syntaxes is None:
+            default_syntaxes = []
+        # load any user-defined syntaxes
+        user_syntaxes = settings.get("syntaxes")
+        if user_syntaxes is None:
+            user_syntaxes = []
 
-		current_syntax = self.view.settings().get('syntax')
+        self.syntaxes = default_syntaxes + user_syntaxes
 
-		# only set the syntax if it's different
-		if new_syntax != current_syntax:
-			# let's make sure it exists first!
-			if os.path.exists(new_syntax_path):
-				self.view.set_syntax_file(new_syntax)
-				print 'Syntax set to ' + name + ' using ' + new_syntax_path
-			else:
-				print 'Syntax file for ' + name + ' does not exist at ' + new_syntax_path
+    def syntax_matches(self, syntax):
+        rules = syntax.get("rules")
 
+        for rule in rules:
+            if 'function' in rule:
+                result = self.function_matches(rule)
+            else:
+                result = self.regexp_matches(rule)
 
-	def load_syntaxes(self):
-		settings = sublime.load_settings(self.plugin_name + '.sublime-settings')
-		self.reraise_exceptions = settings.get("reraise_exceptions")
-		# load the default syntaxes
-		default_syntaxes = settings.get("default_syntaxes")
-		if default_syntaxes is None:
-			default_syntaxes = []
-		# load any user-defined syntaxes
-		user_syntaxes = settings.get("syntaxes")
-		if user_syntaxes is None:
-			user_syntaxes = []
-		
-		self.syntaxes = default_syntaxes + user_syntaxes
+            # return on first match. don't return if it doesn't
+            # match or else the remaining rules won't be applied
+            if result:
+                return True
 
+        return False  # there are no rules or none match
 
-	def syntax_matches(self, syntax):
-		rules = syntax.get("rules")
+    def function_matches(self, rule):
+        function = rule.get("function")
+        path_to_file = function.get("source")
+        function_name = function.get("name")
 
-		for rule in rules:
-			if 'function' in rule:
-				result = self.function_matches(rule)
-			else:
-				result = self.regexp_matches(rule)
+        if not path_to_file:
+            path_to_file = function_name + '.py'
 
-			# return on first match. don't return if it doesn't
-			# match or else the remaining rules won't be applied
-			if result:
-				return True
+        # is path_to_file absolute?
+        if not os.path.isabs(path_to_file):
+            user_file = self.user_dir + os.path.sep + path_to_file
+            plugin_file = self.plugin_dir + os.path.sep + path_to_file
 
-		return False # there are no rules or none match
+            # it's not absolute, so look in Packages/User
+            if os.path.exists(user_file):
+                path_to_file = user_file
+            # now look in the plugin's directory
+            elif os.path.exists(plugin_file):
+                path_to_file = plugin_file
+            else:
+                # can't find it ... nothing more to do
+                return False
 
+        # bubble exceptions up only if the user wants them
+        try:
+            with open(path_to_file, 'r') as the_file:
+                function_source = the_file.read()
+        except:
+            if self.reraise_exceptions:
+                raise
+            else:
+                return False
 
-	def function_matches(self, rule):
-		function = rule.get("function")
-		path_to_file = function.get("source")
-		function_name = function.get("name")
+        try:
+            exec(function_source)
+        except:
+            if self.reraise_exceptions:
+                raise
+            else:
+                return False
 
-		if not path_to_file:
-			path_to_file = function_name + '.py'
+        try:
+            return eval(function_name + '(\'' + self.file_name + '\')')
+        except:
+            if self.reraise_exceptions:
+                raise
+            else:
+                return False
 
-		# is path_to_file absolute?
-		if not os.path.isabs(path_to_file):
-			user_file = self.user_dir + os.path.sep + path_to_file
-			plugin_file = self.plugin_dir + os.path.sep + path_to_file
+    def regexp_matches(self, rule):
+        if "first_line" in rule:
+            subject = self.first_line
+            regexp = rule.get("first_line")
+        elif "binary" in rule:
+            subject = self.first_line
+            regexp = '^#\\!(?:.+)' + rule.get("binary")
+        elif "file_name" in rule:
+            subject = self.file_name
+            regexp = rule.get("file_name")
+        else:
+            return False
 
-			# it's not absolute, so look in Packages/User
-			if os.path.exists(user_file):
-				path_to_file = user_file
-			# now look in the plugin's directory
-			elif os.path.exists(plugin_file):
-				path_to_file = plugin_file
-			else:
-				# can't find it ... nothing more to do
-				return False
-
-		# bubble exceptions up only if the user wants them
-		try:
-			with open(path_to_file, 'r') as the_file:
-				function_source = the_file.read()
-		except:
-			if self.reraise_exceptions:
-				raise
-			else:
-				return False
-
-		try:
-			exec(function_source)
-		except:
-			if self.reraise_exceptions:
-				raise
-			else:
-				return False
-
-		try:
-			return eval(function_name + '(\'' + self.file_name + '\')')
-		except:
-			if self.reraise_exceptions:
-				raise
-			else:
-				return False
-
-
-	def regexp_matches(self, rule):
-		if "first_line" in rule:
-			subject = self.first_line
-			regexp = rule.get("first_line")
-		elif "binary" in rule:
-			subject = self.first_line
-			regexp = '^#\\!(?:.+)' + rule.get("binary")
-		elif "file_name" in rule:
-			subject = self.file_name
-			regexp = rule.get("file_name")
-		else:
-			return False
-
-		if regexp and subject:
-			return re.match(regexp, subject) != None
-		else:
-			return False
-
+        if regexp and subject:
+            return re.match(regexp, subject) != None
+        else:
+            return False

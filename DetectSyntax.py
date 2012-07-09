@@ -104,20 +104,23 @@ class DetectSyntaxCommand(sublime_plugin.EventListener):
 		rules = syntax.get("rules")
 
 		for rule in rules:
-			if 'function' in rule:
-				result = self.function_matches(rule)
+			if not rule:  # ignore empty rules
+				continue
+			for matchtype, matchdef in rule.items():
+				if matchtype == 'function':
+					result = self.function_matches(matchdef)
+				else:
+					result = self.regexp_matches(matchtype, matchdef)
+				if not result:
+					break
 			else:
-				result = self.regexp_matches(rule)
-
-			# return on first match. don't return if it doesn't
-			# match or else the remaining rules won't be applied
-			if result:
+				# if we get here, it's because every rule in the dict matches
+				# and none of them triggered the 'break' in the loop
 				return True
 
 		return False  # there are no rules or none match
 
-	def function_matches(self, rule):
-		function = rule.get("function")
+	def function_matches(self, function):
 		path_to_file = function.get("source")
 		function_name = function.get("name")
 
@@ -165,16 +168,14 @@ class DetectSyntaxCommand(sublime_plugin.EventListener):
 			else:
 				return False
 
-	def regexp_matches(self, rule):
-		if "first_line" in rule:
+	def regexp_matches(self, matchtype, regexp):
+		if matchtype == "first_line":
 			subject = self.first_line
-			regexp = rule.get("first_line")
-		elif "binary" in rule:
+		elif matchtype == "binary":
 			subject = self.first_line
-			regexp = '^#\\!(?:.+)' + rule.get("binary")
-		elif "file_name" in rule:
+			regexp = '^#\\!(?:.+)' + regexp
+		elif matchtype == "file_name":
 			subject = self.file_name
-			regexp = rule.get("file_name")
 		else:
 			return False
 
